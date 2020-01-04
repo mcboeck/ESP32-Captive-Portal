@@ -3,10 +3,6 @@
  *  Version 0.1
  *  Copyright (C) 2020  
  *  McBoeck
- *  
- *  Icons from: Sieren Homepoint https://github.com/sieren/Homepoint and https://fontawesome.com/icons?d=gallery
- *  Functions from: Hartmut Wendt  www.zihatec.de
- *  
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
