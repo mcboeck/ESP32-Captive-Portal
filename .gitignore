@@ -8,3 +8,5 @@
 include
 lib
 platformio.ini
+.DS_Store
+src/.*
