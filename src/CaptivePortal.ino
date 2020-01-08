@@ -75,6 +75,7 @@ WebServer server(80);
 /* Soft AP network parameters */
 IPAddress CPapIP(172, 20, 0, 1);
 IPAddress CPnetMsk(255, 255, 255, 0);
+IPAddress EmptyIP(0, 0, 0, 0);
 
 WiFiEEPromData MyWiFiConfig;
 
@@ -254,11 +255,11 @@ void handleReset() {
   strncpy( MyWiFiConfig.ConfigValid, "TK", sizeof(MyWiFiConfig.ConfigValid) );
   len = strlen(MyWiFiConfig.ConfigValid);
   MyWiFiConfig.ConfigValid[len+1] = '\0'; 
-  MyWiFiConfig.IPAdd = (0, 0, 0, 0);
-  MyWiFiConfig.Gate = (0, 0, 0, 0);
-  MyWiFiConfig.SubNet = (0, 0, 0, 0);
-  MyWiFiConfig.DNS = (0, 0, 0, 0);
-  boolean ret_val = saveCredentials();
+  MyWiFiConfig.IPAdd = EmptyIP;
+  MyWiFiConfig.Gate = EmptyIP;
+  MyWiFiConfig.SubNet = EmptyIP;
+  MyWiFiConfig.DNS = EmptyIP;
+  saveCredentials();
   server.sendHeader("Content-Length", String(page.length()));
   server.send(200, "text/html", page);
   Serial.println(F("Reset WiFi Credentials. Reboot in 2s"));
@@ -403,10 +404,10 @@ void handleWifi(boolean scan) {
     String item = FPSTR(CPHTTP_FORM_START);
     String temp = MyWiFiConfig.APSTAName;
     item.replace("> S", " checked> S");
-    if (MyWiFiConfig.APSTAName != ""){
+    if (strcmp(MyWiFiConfig.APSTAName, "") != 0) {
       item.replace("'SSID'", "'SSID' value='" + temp + "'");  
     }
-    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0){
+    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0) {
       temp = MyWiFiConfig.HostName;
       item.replace("'hostname'", "'hostname' value='" + temp + "'");
     }
@@ -415,10 +416,10 @@ void handleWifi(boolean scan) {
   else {
     String item = FPSTR(CPHTTP_FORM_START);
     String temp = MyWiFiConfig.APSTAName;
-    if (MyWiFiConfig.APSTAName != ""){
+    if (strcmp(MyWiFiConfig.APSTAName, "") != 0) {
       item.replace("'SSID'", "'SSID' value='" + temp + "'");
     }
-    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0){
+    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0) {
       temp = MyWiFiConfig.HostName;
       item.replace("'hostname'", "'hostname' value='" + temp + "'");
     }
@@ -432,7 +433,7 @@ void handleWifi(boolean scan) {
     item.replace("{n}", "ip");
     item.replace("{p}", "Static IP");
     item.replace("{l}", "15");
-    if (MyWiFiConfig.IPAdd != (0,0,0,0)) {
+    if (MyWiFiConfig.IPAdd != EmptyIP) {
       item.replace("{v}", toStringIp(MyWiFiConfig.IPAdd));
     }
     else {
@@ -446,7 +447,7 @@ void handleWifi(boolean scan) {
     item.replace("{n}", "gw");
     item.replace("{p}", "Static Gateway");
     item.replace("{l}", "15");
-    if (MyWiFiConfig.Gate != (0,0,0,0)) {
+    if (MyWiFiConfig.Gate != EmptyIP) {
       item.replace("{v}", toStringIp(MyWiFiConfig.Gate));
     }
     else {
@@ -460,7 +461,7 @@ void handleWifi(boolean scan) {
     item.replace("{n}", "sn");
     item.replace("{p}", "Subnet");
     item.replace("{l}", "15");
-    if (MyWiFiConfig.SubNet != (0,0,0,0)) {
+    if (MyWiFiConfig.SubNet != EmptyIP) {
       item.replace("{v}", toStringIp(MyWiFiConfig.SubNet));
     }
     else {
@@ -474,7 +475,7 @@ void handleWifi(boolean scan) {
     item.replace("{n}", "dns");
     item.replace("{p}", "DNS");
     item.replace("{l}", "15");
-    if (MyWiFiConfig.DNS != (0,0,0,0)) {
+    if (MyWiFiConfig.DNS != EmptyIP) {
       item.replace("{v}", toStringIp(MyWiFiConfig.DNS));
     }
     else {
@@ -562,10 +563,10 @@ void handleWifiSave(){
     }
   }
   else{
-    MyWiFiConfig.IPAdd = (0, 0, 0, 0);
-    MyWiFiConfig.Gate = (0, 0, 0, 0);
-    MyWiFiConfig.SubNet = (0, 0, 0, 0);
-    MyWiFiConfig.DNS = (0, 0, 0, 0);
+    MyWiFiConfig.IPAdd = EmptyIP;
+    MyWiFiConfig.Gate = EmptyIP;
+    MyWiFiConfig.SubNet = EmptyIP;
+    MyWiFiConfig.DNS = EmptyIP;
   }
   if (MyWiFiConfig.StaticIP < 4){
     ret_val = saveCredentials();
