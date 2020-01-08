@@ -25,8 +25,11 @@
 #include <DNSServer.h>
 #include <EEPROM.h>
 
+#define ESP_getChipId()   ((uint32_t)ESP.getEfuseMac())
+
 static const byte WiFiPwdLen = 25;
 static const byte APSTANameLen = 20;
+static const byte HostNameLen =20;
 
 /*____Captiveportal____*/
 const char CPHTTP_HEAD[] PROGMEM            = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/><title>{v}</title>";
@@ -35,7 +38,7 @@ const char CPHTTP_SCRIPT[] PROGMEM          = "<script>function c(l){document.ge
 const char CPHTTP_HEAD_END[] PROGMEM        = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
 const char CPHTTP_PORTAL_OPTIONS[] PROGMEM  = "<form action=\"/wifi\" method=\"get\"><button>Configure WiFi</button></form><br/><form action=\"/0wifi\" method=\"get\"><button>Configure WiFi (No Scan)</button></form><br/><form action=\"/reset\" method=\"get\"><button>Reset to default</button></form><br/>";
 const char CPHTTP_ITEM[] PROGMEM            = "<div><a href='#p' onclick='c(this)'>{v}</a>&nbsp;<span class='q {i}'>{r}%</span></div>";
-const char CPHTTP_FORM_START[] PROGMEM      = "<label><input style='width:10%' type='checkbox' onclick='hC(this)'> Static IP</label><form method='get' action='wifisave'><label><input style='width:10%' type='checkbox' id='ap' name='ap'> AP Mode</label><input id='s' name='s' length=32 placeholder='SSID'><br/><input id='p' name='p' length=64 type='password' placeholder='password'><br/>";
+const char CPHTTP_FORM_START[] PROGMEM      = "<label><input style='width:10%' type='checkbox' onclick='hC(this)'> Static IP</label><form method='get' action='wifisave'><label><input style='width:10%' type='checkbox' id='ap' name='ap'> AP Mode</label><input id='s' name='s' length=32 placeholder='SSID'><br/><input id='p' name='p' length=64 type='password' placeholder='password'><br/><br/><input id='h' name='h' length=20 placeholder='hostname'><br/>";
 const char CPHTTP_FORM_PARAM[] PROGMEM      = "<br/><input id='{i}' name='{n}' length={l} placeholder='{p}' value='{v}'>";
 const char CPHTTP_FORM_END[] PROGMEM        = "<br/><button type='submit'>save</button></form>";
 const char CPHTTP_SCAN_LINK[] PROGMEM       = "<br/><div class=\"c\"><a href=\"/wifi\">Scan</a></div>";
@@ -47,6 +50,7 @@ struct WiFiEEPromData{
   bool CapPortal = true;        // CaptivePortal on in AP Mode
   char APSTAName[APSTANameLen]; // STATION /AP Point Name TO cONNECT, if definded   
   char WiFiPwd[WiFiPwdLen];     // WiFiPAssword, if definded
+  char HostName[HostNameLen];   // Hostname, if defined
   byte StaticIP = 0;            // Static IP 0=off, 1=on, 2=IP without DNS valid, 3=IP incl. DNS Valid, 4=IP settings invalid
   IPAddress IPAdd;              // IP for Static IP
   IPAddress Gate;               // Gateway for Static IP
@@ -56,7 +60,7 @@ struct WiFiEEPromData{
 };
 
 // hostname for mDNS
-const char* ESPHostname = "enterhostnamehere";
+String ESPHostname = "ESP_" + String((uint32_t)ESP.getEfuseMac(), HEX);
 
 // DNS server
 const byte DNS_PORT = 53;
@@ -159,7 +163,7 @@ byte ConnectWifiAP() {
   if (connRes == 3 ) { 
     WiFi.setAutoReconnect(true); // Set whether module will attempt to reconnect to an access point in case it is disconnected.
     // Setup MDNS responder
-    if (!MDNS.begin(ESPHostname)) {
+    if (!MDNS.begin(MyWiFiConfig.HostName)) {
       Serial.println(F("Error: MDNS"));
     } 
     else {
@@ -244,6 +248,9 @@ void handleReset() {
   strncpy( MyWiFiConfig.WiFiPwd, "12345678", sizeof(MyWiFiConfig.WiFiPwd) );
   len = strlen(MyWiFiConfig.WiFiPwd);
   MyWiFiConfig.WiFiPwd[len+1] = '\0';  
+  strncpy( MyWiFiConfig.HostName, ESPHostname.c_str(), sizeof(MyWiFiConfig.HostName) );
+  len = strlen(MyWiFiConfig.HostName);
+  MyWiFiConfig.HostName[len+1] = '\0';
   strncpy( MyWiFiConfig.ConfigValid, "TK", sizeof(MyWiFiConfig.ConfigValid) );
   len = strlen(MyWiFiConfig.ConfigValid);
   MyWiFiConfig.ConfigValid[len+1] = '\0'; 
@@ -270,7 +277,7 @@ void handleRoot() {
   page += FPSTR(CPHTTP_STYLE);
   page += FPSTR(CPHTTP_HEAD_END);
   page += "<h1>";
-  page += ESPHostname;
+  page += MyWiFiConfig.HostName;
   page += "</h1>";
   page += F("<h3>WiFiManager</h3>");
   page += FPSTR(CPHTTP_PORTAL_OPTIONS);
@@ -306,7 +313,7 @@ void handleNotFound() {
 
 // Redirect to captive portal if we got a request for another domain. Return true in that case so the page handler do not try to handle the request again.
 boolean captivePortal() {
-  if (!isIp(server.hostHeader()) && server.hostHeader() != (String(ESPHostname)+".local")) {
+  if (!isIp(server.hostHeader()) && server.hostHeader() != (String(MyWiFiConfig.HostName)+".local")) {
     // Serial.println("Request redirected to captive portal");  
     server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()), true);
     server.send ( 302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
@@ -394,17 +401,27 @@ void handleWifi(boolean scan) {
 
   if (MyWiFiConfig.StaticIP > 0) {
     String item = FPSTR(CPHTTP_FORM_START);
+    String temp = MyWiFiConfig.APSTAName;
     item.replace("> S", " checked> S");
     if (MyWiFiConfig.APSTAName != ""){
-      String temp = MyWiFiConfig.APSTAName;
       item.replace("'SSID'", "'SSID' value='" + temp + "'");  
+    }
+    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0){
+      temp = MyWiFiConfig.HostName;
+      item.replace("'hostname'", "'hostname' value='" + temp + "'");
     }
     page += item;
   }
   else {
     String item = FPSTR(CPHTTP_FORM_START);
     String temp = MyWiFiConfig.APSTAName;
-    item.replace("'SSID'", "'SSID' value='" + temp + "'");
+    if (MyWiFiConfig.APSTAName != ""){
+      item.replace("'SSID'", "'SSID' value='" + temp + "'");
+    }
+    if (strcmp(MyWiFiConfig.HostName, ESPHostname.c_str()) != 0){
+      temp = MyWiFiConfig.HostName;
+      item.replace("'hostname'", "'hostname' value='" + temp + "'");
+    }
     page += item;
   }
 
@@ -492,6 +509,7 @@ void handleWifiSave(){
   String _ap = server.arg("ap").c_str();
   String _ssid = server.arg("s").c_str();
   String _pass = server.arg("p").c_str();
+  String _host = server.arg("h").c_str();
   String _ip = server.arg("ip").c_str();
   String _gw = server.arg("gw").c_str();
   String _sn = server.arg("sn").c_str();
@@ -518,6 +536,14 @@ void handleWifiSave(){
     strncpy(MyWiFiConfig.WiFiPwd, temp, sizeof(MyWiFiConfig.WiFiPwd));
     len = strlen(MyWiFiConfig.WiFiPwd);
     MyWiFiConfig.WiFiPwd[len+1] = '\0';  
+  }
+  if (_host!= "") {
+    _host.toCharArray(temp, _host.length() + 1);
+    strncpy(MyWiFiConfig.HostName, temp, sizeof(MyWiFiConfig.HostName));
+    len = strlen(MyWiFiConfig.HostName);
+    MyWiFiConfig.HostName[len+1] = '\0';  
+    Serial.print("Hostname: ");
+    Serial.println(MyWiFiConfig.HostName);
   }
   if (MyWiFiConfig.StaticIP > 0) {
     MyWiFiConfig.StaticIP = 4; // Set to invalid IP-config
@@ -618,7 +644,7 @@ void setup() {
   WiFi.setAutoReconnect (false);
   WiFi.persistent(false);
   WiFi.disconnect(); 
-  WiFi.setHostname(ESPHostname); // Set the DHCP hostname assigned to ESP station.
+  WiFi.setHostname(MyWiFiConfig.HostName); // Set the DHCP hostname assigned to ESP station.
   if (loadCredentials()) // Load WLAN credentials for WiFi Settings
   { 
      Serial.println(F("Valid Credentials found."));   
@@ -661,12 +687,11 @@ void setup() {
     } 
 }
 
-void loop() 
- {  
+void loop() {  
   if (SoftAccOK)
   {
     dnsServer.processNextRequest(); //DNS
   }
   //HTTP
   server.handleClient();  
-  }
+}
