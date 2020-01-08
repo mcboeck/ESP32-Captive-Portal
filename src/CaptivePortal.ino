@@ -541,9 +541,7 @@ void handleWifiSave(){
     _host.toCharArray(temp, _host.length() + 1);
     strncpy(MyWiFiConfig.HostName, temp, sizeof(MyWiFiConfig.HostName));
     len = strlen(MyWiFiConfig.HostName);
-    MyWiFiConfig.HostName[len+1] = '\0';  
-    Serial.print("Hostname: ");
-    Serial.println(MyWiFiConfig.HostName);
+    MyWiFiConfig.HostName[len+1] = '\0';
   }
   if (MyWiFiConfig.StaticIP > 0) {
     MyWiFiConfig.StaticIP = 4; // Set to invalid IP-config
