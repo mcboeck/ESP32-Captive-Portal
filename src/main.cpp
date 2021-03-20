@@ -18,12 +18,15 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */  
 
+#include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClient.h> 
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
 #include <EEPROM.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 #define ESP_getChipId()   ((uint32_t)ESP.getEfuseMac())
 
@@ -35,7 +38,7 @@ static const byte HostNameLen =20;
 const char CPHTTP_HEAD[] PROGMEM            = "<!DOCTYPE html><html lang=\"en\"><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1, user-scalable=no\"/><title>{v}</title>";
 const char CPHTTP_STYLE[] PROGMEM           = "<style>.c{text-align: center;} div,input{padding:5px;font-size:1em;} input{width:95%;} body{text-align: center;font-family:verdana;} button{border:0;border-radius:0.3rem;background-color:#1fa3ec;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;} .q{float: right;width: 64px;text-align: right;} .l{background: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAALVBMVEX///8EBwfBwsLw8PAzNjaCg4NTVVUjJiZDRUUUFxdiZGSho6OSk5Pg4eFydHTCjaf3AAAAZElEQVQ4je2NSw7AIAhEBamKn97/uMXEGBvozkWb9C2Zx4xzWykBhFAeYp9gkLyZE0zIMno9n4g19hmdY39scwqVkOXaxph0ZCXQcqxSpgQpONa59wkRDOL93eAXvimwlbPbwwVAegLS1HGfZAAAAABJRU5ErkJggg==\") no-repeat left center;background-size: 1em;}</style>";
 const char CPHTTP_SCRIPT[] PROGMEM          = "<script>function c(l){document.getElementById('s').value=l.innerText||l.textContent;document.getElementById('p').focus();}function hC(cb){this.open('?'+'sip='+cb.checked,'_self');}</script>";
-const char CPHTTP_HEAD_END[] PROGMEM        = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
+const char CPHTTP_HEAD_END[]                = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
 const char CPHTTP_PORTAL_OPTIONS[] PROGMEM  = "<form action=\"/wifi\" method=\"get\"><button>Configure WiFi</button></form><br/><form action=\"/0wifi\" method=\"get\"><button>Configure WiFi (No Scan)</button></form><br/><form action=\"/reset\" method=\"get\"><button>Reset to default</button></form><br/>";
 const char CPHTTP_ITEM[] PROGMEM            = "<div><a href='#p' onclick='c(this)'>{v}</a>&nbsp;<span class='q {i}'>{r}%</span></div>";
 const char CPHTTP_FORM_START[] PROGMEM      = "<label><input style='width:10%' type='checkbox' onclick='hC(this)'> Static IP</label><form method='get' action='wifisave'><label><input style='width:10%' type='checkbox' id='ap' name='ap'> AP Mode</label><input id='s' name='s' length=32 placeholder='SSID'><br/><input id='p' name='p' length=64 type='password' placeholder='password'><br/><br/><input id='h' name='h' length=20 placeholder='hostname'><br/>";
@@ -85,123 +88,39 @@ unsigned long startMillis;
 /** Current WLAN status */
 short status = WL_IDLE_STATUS;
 
-
-
-void InitalizeHTTPServer() {
-  // Setup web pages: root, wifi config pages, SO captive portal detectors and not found.
-  server.on("/", handleRoot);
-  server.on("/wifi", handleWifi1);
-  server.on("/0wifi", handleWifi0);
-  server.on("/wifisave", handleWifiSave);
-  server.on("/reset", handleReset);
-
-  if (MyWiFiConfig.CapPortal) { server.on("/generate_204", handleRoot); } //Android captive portal. Maybe not needed. Might be handled by notFound handler.
-  if (MyWiFiConfig.CapPortal) { server.on("/favicon.ico", handleRoot); }   //Another Android captive portal. Maybe not needed. Might be handled by notFound handler. Checked on Sony Handy
-  if (MyWiFiConfig.CapPortal) { server.on("/fwlink", handleRoot); }  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
-  server.onNotFound ( handleNotFound );
-  server.begin(); // Web server start
+// Is this an IP?
+boolean isIp(String str) {
+  for (int i = 0; i < str.length(); i++) {
+    int c = str.charAt(i);
+    if (c != '.' && (c < '0' || c > '9')) {
+      return false;
+    }
+  }
+  return true;
 }
 
-boolean CreateWifiSoftAP() {
-  WiFi.disconnect();
-  Serial.print(F("Initalize SoftAP "));
-  if (MyWiFiConfig.PwDReq) {
-      SoftAccOK  =  WiFi.softAP(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd); // Passwordlength at least 8 char
-    } 
-    else {
-      SoftAccOK  =  WiFi.softAP(MyWiFiConfig.APSTAName); // Access Point WITHOUT Password
-    }
-  delay(2000); // Delay to set the correct IP address
-  WiFi.softAPConfig(CPapIP, CPapIP, CPnetMsk);
-  if (SoftAccOK) {
-  /* Setup the DNS server redirecting all the domains to the CPapIP */  
-  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer.start(DNS_PORT, "*", CPapIP);
-  Serial.println(F("successful."));
-  } 
-  else {
-  Serial.println(F("Soft AP Error."));
-  Serial.println(MyWiFiConfig.APSTAName);
-  Serial.println(MyWiFiConfig.WiFiPwd);
+// convert IP to String
+String toStringIp(IPAddress ip) {
+  String res = "";
+  for (int i = 0; i < 3; i++) {
+    res += String((ip >> (8 * i)) & 0xFF) + ".";
   }
-  return SoftAccOK;
+  res += String(((ip >> 8 * 3)) & 0xFF);
+  return res;
 }
 
-byte ConnectWifiAP() {
-  Serial.println(F("Initalizing Wifi Client."));  
-  byte connRes = 0;
-  byte retry = 0;
-  WiFi.disconnect();
-  WiFi.softAPdisconnect(true); // Function will set currently configured SSID and password of the soft-AP to null values. The parameter  is optional. If set to true it will switch the soft-AP mode off.
-  delay(500);  
-  switch (MyWiFiConfig.StaticIP) {
-    case 2:
-      WiFi.config(MyWiFiConfig.IPAdd, MyWiFiConfig.Gate, MyWiFiConfig.SubNet);
-      break;
-    case 3:
-      WiFi.config(MyWiFiConfig.IPAdd, MyWiFiConfig.Gate, MyWiFiConfig.SubNet, MyWiFiConfig.DNS);
-      break;
-    default:
-      break;
-  }
-  WiFi.begin(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd);
-  connRes  = WiFi.waitForConnectResult();
-  while (( connRes == 0 ) and (retry != 10))  //if connRes == 0  "IDLE_STATUS - change Status"
-    { 
-      connRes  = WiFi.waitForConnectResult();
-      delay(2000);
-      retry++;
-      Serial.print(F("."));
-      // statement(s)
-    }
-  while (( connRes == 1 ) and (retry != 10))  //if connRes == 1  NO_SSID_AVAILin - SSID cannot be reached
-    { 
-      connRes  = WiFi.waitForConnectResult();
-      delay(2000);
-      retry++;
-      Serial.print(F("."));
-    }
-  if (connRes == 3 ) { 
-    WiFi.setAutoReconnect(true); // Set whether module will attempt to reconnect to an access point in case it is disconnected.
-    // Setup MDNS responder
-    if (!MDNS.begin(MyWiFiConfig.HostName)) {
-      Serial.println(F("Error: MDNS"));
-    } 
-    else {
-      MDNS.addService("http", "tcp", 80); 
-    }
-  }
-  while (( connRes == 4 ) and (retry != 10))  //if connRes == 4  Bad Password. Sometimes happens this with corrct PWD
-    { 
-      WiFi.begin(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd); 
-      connRes = WiFi.waitForConnectResult();
-      delay(3000);
-      retry++;
-      Serial.print(F("."));                 
-    }
-  if (connRes == 4 ) {  
-    Serial.println(F("STA Pwd Err"));                     
-    Serial.println(MyWiFiConfig.APSTAName);
-    Serial.println(MyWiFiConfig.WiFiPwd); 
-    WiFi.disconnect();
-  }
-  Serial.println("");
-  return connRes;
-}
+// Show Wifi quality
+int getRSSIasQuality(int RSSI) {
+  int quality = 0;
 
-// Load WLAN credentials from EEPROM
-bool loadCredentials() {
-  bool RetValue;
-  EEPROM.begin(512);
-  EEPROM.get(0, MyWiFiConfig);
-  EEPROM.end();
-  if (String(MyWiFiConfig.ConfigValid) == String("TK")) {
-    RetValue = true;
-  } 
-  else {
-    RetValue = false; // WLAN Settings not found.
+  if (RSSI <= -100) {
+    quality = 0;
+  } else if (RSSI >= -50) {
+    quality = 100;
+  } else {
+    quality = 2 * (RSSI + 100);
   }
-  return RetValue;
+  return quality;
 }
 
 // Store WLAN credentials to EEPROM
@@ -236,6 +155,18 @@ int saveCredentials() {
   return RetValue;
 }
 
+// Redirect to captive portal if we got a request for another domain. Return true in that case so the page handler do not try to handle the request again.
+boolean captivePortal() {
+  if (!isIp(server.hostHeader()) && server.hostHeader() != (String(MyWiFiConfig.HostName)+".local")) {
+    // Serial.println("Request redirected to captive portal");  
+    server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()), true);
+    server.send ( 302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
+    server.client().stop(); // Stop is needed because we sent no content length
+    return true;
+  }
+  return false;
+}
+ 
 // Reset settings to default
 void handleReset() {
   byte len;
@@ -312,18 +243,6 @@ void handleNotFound() {
   server.send ( 404, "text/plain", message );
 }
 
-// Redirect to captive portal if we got a request for another domain. Return true in that case so the page handler do not try to handle the request again.
-boolean captivePortal() {
-  if (!isIp(server.hostHeader()) && server.hostHeader() != (String(MyWiFiConfig.HostName)+".local")) {
-    // Serial.println("Request redirected to captive portal");  
-    server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()), true);
-    server.send ( 302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
-    server.client().stop(); // Stop is needed because we sent no content length
-    return true;
-  }
-  return false;
-}
- 
 // Wifi config page handler
 void handleWifi(boolean scan) {
   String sip = server.arg("sip").c_str();
@@ -596,42 +515,125 @@ void handleWifiSave(){
   }
 }
 
-// Is this an IP?
-boolean isIp(String str) {
-  for (int i = 0; i < str.length(); i++) {
-    int c = str.charAt(i);
-    if (c != '.' && (c < '0' || c > '9')) {
-      return false;
+void InitalizeHTTPServer() {
+  // Setup web pages: root, wifi config pages, SO captive portal detectors and not found.
+  server.on("/", handleRoot);
+  server.on("/wifi", handleWifi1);
+  server.on("/0wifi", handleWifi0);
+  server.on("/wifisave", handleWifiSave);
+  server.on("/reset", handleReset);
+
+  if (MyWiFiConfig.CapPortal) { server.on("/generate_204", handleRoot); } //Android captive portal. Maybe not needed. Might be handled by notFound handler.
+  if (MyWiFiConfig.CapPortal) { server.on("/favicon.ico", handleRoot); }   //Another Android captive portal. Maybe not needed. Might be handled by notFound handler. Checked on Sony Handy
+  if (MyWiFiConfig.CapPortal) { server.on("/fwlink", handleRoot); }  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+  server.onNotFound ( handleNotFound );
+  server.begin(); // Web server start
+}
+
+boolean CreateWifiSoftAP() {
+  WiFi.disconnect();
+  Serial.print(F("Initalize SoftAP "));
+  if (MyWiFiConfig.PwDReq) {
+      SoftAccOK  =  WiFi.softAP(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd); // Passwordlength at least 8 char
+    } 
+    else {
+      SoftAccOK  =  WiFi.softAP(MyWiFiConfig.APSTAName); // Access Point WITHOUT Password
+    }
+  delay(2000); // Delay to set the correct IP address
+  WiFi.softAPConfig(CPapIP, CPapIP, CPnetMsk);
+  if (SoftAccOK) {
+  /* Setup the DNS server redirecting all the domains to the CPapIP */  
+  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+  dnsServer.start(DNS_PORT, "*", CPapIP);
+  Serial.println(F("successful."));
+  } 
+  else {
+  Serial.println(F("Soft AP Error."));
+  Serial.println(MyWiFiConfig.APSTAName);
+  Serial.println(MyWiFiConfig.WiFiPwd);
+  }
+  return SoftAccOK;
+}
+
+byte ConnectWifiAP() {
+  Serial.println(F("Initalizing Wifi Client."));  
+  byte connRes = 0;
+  byte retry = 0;
+  WiFi.disconnect();
+  WiFi.softAPdisconnect(true); // Function will set currently configured SSID and password of the soft-AP to null values. The parameter  is optional. If set to true it will switch the soft-AP mode off.
+  delay(500);  
+  switch (MyWiFiConfig.StaticIP) {
+    case 2:
+      WiFi.config(MyWiFiConfig.IPAdd, MyWiFiConfig.Gate, MyWiFiConfig.SubNet);
+      break;
+    case 3:
+      WiFi.config(MyWiFiConfig.IPAdd, MyWiFiConfig.Gate, MyWiFiConfig.SubNet, MyWiFiConfig.DNS);
+      break;
+    default:
+      break;
+  }
+  WiFi.begin(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd);
+  connRes  = WiFi.waitForConnectResult();
+  while (( connRes == 0 ) and (retry != 10))  //if connRes == 0  "IDLE_STATUS - change Status"
+    { 
+      connRes  = WiFi.waitForConnectResult();
+      delay(2000);
+      retry++;
+      Serial.print(F("."));
+      // statement(s)
+    }
+  while (( connRes == 1 ) and (retry != 10))  //if connRes == 1  NO_SSID_AVAILin - SSID cannot be reached
+    { 
+      connRes  = WiFi.waitForConnectResult();
+      delay(2000);
+      retry++;
+      Serial.print(F("."));
+    }
+  if (connRes == 3 ) { 
+    WiFi.setAutoReconnect(true); // Set whether module will attempt to reconnect to an access point in case it is disconnected.
+    // Setup MDNS responder
+    if (!MDNS.begin(MyWiFiConfig.HostName)) {
+      Serial.println(F("Error: MDNS"));
+    } 
+    else {
+      MDNS.addService("http", "tcp", 80); 
     }
   }
-  return true;
+  while (( connRes == 4 ) and (retry != 10))  //if connRes == 4  Bad Password. Sometimes happens this with corrct PWD
+    { 
+      WiFi.begin(MyWiFiConfig.APSTAName, MyWiFiConfig.WiFiPwd); 
+      connRes = WiFi.waitForConnectResult();
+      delay(3000);
+      retry++;
+      Serial.print(F("."));                 
+    }
+  if (connRes == 4 ) {  
+    Serial.println(F("STA Pwd Err"));                     
+    Serial.println(MyWiFiConfig.APSTAName);
+    Serial.println(MyWiFiConfig.WiFiPwd); 
+    WiFi.disconnect();
+  }
+  Serial.println("");
+  return connRes;
 }
 
-// convert IP to String
-String toStringIp(IPAddress ip) {
-  String res = "";
-  for (int i = 0; i < 3; i++) {
-    res += String((ip >> (8 * i)) & 0xFF) + ".";
+// Load WLAN credentials from EEPROM
+bool loadCredentials() {
+  bool RetValue;
+  EEPROM.begin(512);
+  EEPROM.get(0, MyWiFiConfig);
+  EEPROM.end();
+  if (String(MyWiFiConfig.ConfigValid) == String("TK")) {
+    RetValue = true;
+  } 
+  else {
+    RetValue = false; // WLAN Settings not found.
   }
-  res += String(((ip >> 8 * 3)) & 0xFF);
-  return res;
-}
-
-// Show Wifi quality
-int getRSSIasQuality(int RSSI) {
-  int quality = 0;
-
-  if (RSSI <= -100) {
-    quality = 0;
-  } else if (RSSI >= -50) {
-    quality = 100;
-  } else {
-    quality = 2 * (RSSI + 100);
-  }
-  return quality;
+  return RetValue;
 }
 
 void setup() {
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   bool CPConnectSuccess = false;
   bool CPCreateSoftAPSucc  = false;
   byte len; 
