@@ -155,13 +155,29 @@ int saveCredentials() {
   return RetValue;
 }
 
+//  Captive Portal
+void handleCP() {  
+  String page = FPSTR(CPHTTP_HEAD);
+  page.replace("{v}", "Options");
+  page += FPSTR(CPHTTP_SCRIPT);
+  page += FPSTR(CPHTTP_STYLE);
+  page += FPSTR(CPHTTP_HEAD_END);
+  page += "<h1>";
+  page += MyWiFiConfig.HostName;
+  page += "</h1>";
+  page += F("<h3>WiFiManager</h3>");
+  page += FPSTR(CPHTTP_PORTAL_OPTIONS);
+  page += FPSTR(CPHTTP_END);
+
+  server.sendHeader("Content-Length", String(page.length()));
+  server.send(200, "text/html", page);
+}
+
 // Redirect to captive portal if we got a request for another domain. Return true in that case so the page handler do not try to handle the request again.
 boolean captivePortal() {
-  if (!isIp(server.hostHeader()) && server.hostHeader() != (String(MyWiFiConfig.HostName)+".local")) {
-    // Serial.println("Request redirected to captive portal");  
-    server.sendHeader("Location", String("http://") + toStringIp(server.client().localIP()), true);
-    server.send ( 302, "text/plain", ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
-    server.client().stop(); // Stop is needed because we sent no content length
+  if ((!isIp(server.hostHeader()) && server.hostHeader() != (String(MyWiFiConfig.HostName)+".local")) || server.hostHeader()==toStringIp(CPapIP)) {
+    Serial.println("Request redirected to captive portal");  
+    handleCP();
     return true;
   }
   return false;
@@ -198,9 +214,9 @@ void handleReset() {
   ESP.restart(); 
 }
 
-//  Main Page:
+//  Main Page
 void handleRoot() {  
-  if (captivePortal()) { // If caprive portal redirect instead of displaying the page.
+  if (captivePortal()) { // If captive portal redirect instead of displaying the page.
     return;
   }
   String page = FPSTR(CPHTTP_HEAD);
@@ -215,13 +231,13 @@ void handleRoot() {
   page += FPSTR(CPHTTP_PORTAL_OPTIONS);
   page += FPSTR(CPHTTP_END);
 
-  server.sendHeader("Content-Length", String(page.length()));
-  server.send(200, "text/html", page);
+  //server.sendHeader("Content-Length", String(page.length()));
+  server.send(200, "text/plain", "ROOT");
 }
 
 // Handle unknown Pages
 void handleNotFound() { 
-  if (captivePortal()) { // If caprive portal redirect instead of displaying the error page.
+  if (captivePortal()) { // If captive portal redirect instead of displaying the error page.
       return;
     } 
   String message = "File Not Found\n\n";
@@ -523,9 +539,9 @@ void InitalizeHTTPServer() {
   server.on("/wifisave", handleWifiSave);
   server.on("/reset", handleReset);
 
-  if (MyWiFiConfig.CapPortal) { server.on("/generate_204", handleRoot); } //Android captive portal. Maybe not needed. Might be handled by notFound handler.
-  if (MyWiFiConfig.CapPortal) { server.on("/favicon.ico", handleRoot); }   //Another Android captive portal. Maybe not needed. Might be handled by notFound handler. Checked on Sony Handy
-  if (MyWiFiConfig.CapPortal) { server.on("/fwlink", handleRoot); }  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+  if (MyWiFiConfig.CapPortal) { server.on("/generate_204", handleCP); } //Android captive portal. Maybe not needed. Might be handled by notFound handler.
+  if (MyWiFiConfig.CapPortal) { server.on("/favicon.ico", handleCP); }   //Another Android captive portal. Maybe not needed. Might be handled by notFound handler. Checked on Sony Handy
+  if (MyWiFiConfig.CapPortal) { server.on("/fwlink", handleCP); }  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
   server.onNotFound ( handleNotFound );
   server.begin(); // Web server start
 }
@@ -641,7 +657,7 @@ void setup() {
    while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB
   }
-  Serial.println(F("Serial Interface initalized at 115200 Baud.")); 
+  Serial.println(F("Serial Interface initalized at 115200 Baud. v0.2")); 
   WiFi.setAutoReconnect (false);
   WiFi.persistent(false);
   WiFi.disconnect(); 
