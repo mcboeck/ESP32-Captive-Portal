@@ -24,6 +24,7 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <DNSServer.h>
+#include <Update.h>
 #include <EEPROM.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -61,6 +62,9 @@ struct WiFiEEPromData{
   IPAddress DNS;                // DNS for Static IP
   char ConfigValid[3];          //If Config is Vaild, Tag "TK" is required"
 };
+
+// WiFiUpdate
+const String PROGMEM serverUpdate = "<form method='POST' action='/upgrade' enctype='multipart/form-data'><input type='file' name='update'><input type='submit' value='Update'></form>";
 
 // hostname for mDNS
 String ESPHostname = "ESP_" + String((uint32_t)ESP.getEfuseMac(), HEX);
@@ -198,9 +202,9 @@ void handleReset() {
   ESP.restart(); 
 }
 
-//  Main Page:
+//  Main Page
 void handleRoot() {  
-  if (captivePortal()) { // If caprive portal redirect instead of displaying the page.
+  if (captivePortal()) { // If captive portal redirect instead of displaying the page.
     return;
   }
   String page = FPSTR(CPHTTP_HEAD);
@@ -219,9 +223,18 @@ void handleRoot() {
   server.send(200, "text/html", page);
 }
 
+// OTA
+void handleUpdate() {  
+  if (captivePortal()) { // If captive portal redirect instead of displaying the page.
+    return;
+  }
+
+  server.sendHeader("Content-Length", String(serverUpdate.length()));
+  server.send(200, "text/html", serverUpdate);
+}
 // Handle unknown Pages
 void handleNotFound() { 
-  if (captivePortal()) { // If caprive portal redirect instead of displaying the error page.
+  if (captivePortal()) { // If captive portal redirect instead of displaying the error page.
       return;
     } 
   String message = "File Not Found\n\n";
@@ -522,6 +535,34 @@ void InitalizeHTTPServer() {
   server.on("/0wifi", handleWifi0);
   server.on("/wifisave", handleWifiSave);
   server.on("/reset", handleReset);
+  server.on("/update", handleUpdate);
+  server.on("/upgrade", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+    ESP.restart();
+    }, []() {
+      HTTPUpload& upload = server.upload();
+      if (upload.status == UPLOAD_FILE_START) {
+        Serial.setDebugOutput(true);
+        Serial.printf("Update: %s\n", upload.filename.c_str());
+        if (!Update.begin()) { //start with max available size
+          Update.printError(Serial);
+        }
+      } else if (upload.status == UPLOAD_FILE_WRITE) {
+        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+          Update.printError(Serial);
+        }
+      } else if (upload.status == UPLOAD_FILE_END) {
+        if (Update.end(true)) { //true to set the size to the current progress
+          Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
+        } else {
+          Update.printError(Serial);
+        }
+        Serial.setDebugOutput(false);
+      } else {
+        Serial.printf("Update Failed Unexpectedly (likely broken connection): status=%d\n", upload.status);
+      }
+    });
 
   if (MyWiFiConfig.CapPortal) { server.on("/generate_204", handleRoot); } //Android captive portal. Maybe not needed. Might be handled by notFound handler.
   if (MyWiFiConfig.CapPortal) { server.on("/favicon.ico", handleRoot); }   //Another Android captive portal. Maybe not needed. Might be handled by notFound handler. Checked on Sony Handy
@@ -641,7 +682,7 @@ void setup() {
    while (!Serial) {
     ; // wait for serial port to connect. Needed for native USB
   }
-  Serial.println(F("Serial Interface initalized at 115200 Baud.")); 
+  Serial.println(F("Serial Interface initalized at 115200 Baud. v0.2")); 
   WiFi.setAutoReconnect (false);
   WiFi.persistent(false);
   WiFi.disconnect(); 
